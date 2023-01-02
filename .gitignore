@@ -1,1 +1,4 @@
 /target
+
+/data/*
+!download_mnist.sh
