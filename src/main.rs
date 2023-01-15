@@ -1,4 +1,5 @@
 use anyhow::Result;
+use log::{debug, error, info};
 use tch::nn::{Module, OptimizerConfig};
 use tch::{kind, nn, Device, Tensor};
 
@@ -6,8 +7,8 @@ fn my_module(p: nn::Path, dim: i64) -> impl nn::Module {
     let x1 = p.zeros("x1", &[dim]);
     let x2 = p.zeros("x2", &[dim]);
     nn::func(move |xs| {
-        println!("x1: {:#?}", x1);
-        println!("x2: {:#?}", x2);
+        debug!("x1: {:#?}", x1);
+        debug!("x2: {:#?}", x2);
         xs * &x1 + xs.exp() * &x2
     })
 }
@@ -35,11 +36,14 @@ fn gradient_descent_from_raw(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl nn::
     let my_module = my_module(vs.root(), 7);
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
     for epoch in 1..=epochs {
-        println!("\nepoch: {}/{}", epoch, epochs);
         let loss = (my_module.forward(xs) - ys)
             .pow_tensor_scalar(2)
             .sum(kind::Kind::Float);
-        println!("loss: {:#?}", loss);
+
+        if epoch % 100 == 0 {
+            println!("\nepoch: {}/{}", epoch, epochs);
+            println!("loss: {:#?}", loss);
+        }
         opt.backward_step(&loss);
     }
     my_module
@@ -66,7 +70,7 @@ pub fn run() -> Result<()> {
     let vs = nn::VarStore::new(Device::Cpu);
     let net = net(&vs.root());
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
-    for epoch in 1..200 {
+    for epoch in 0..200 {
         let loss = net
             .forward(&m.train_images)
             .cross_entropy_for_logits(&m.train_labels);
@@ -74,28 +78,38 @@ pub fn run() -> Result<()> {
         let test_accuracy = net
             .forward(&m.test_images)
             .accuracy_for_logits(&m.test_labels);
-        println!(
-            "epoch: {:4} train loss: {:8.5} test acc: {:5.2}%",
-            epoch,
-            f64::from(&loss),
-            100. * f64::from(&test_accuracy),
-        );
+        if epoch % 50 == 0 {
+            println!(
+                "epoch: {:4} train loss: {:8.5} test acc: {:5.2}%",
+                epoch + 1,
+                f64::from(&loss),
+                100. * f64::from(&test_accuracy),
+            );
+        }
     }
     Ok(())
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+    debug!("debug!");
+    error!("error!");
+    info!("info!");
     run()
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::gradient_descent_from_raw;
     use tch::{nn::Module, Tensor};
 
-    use crate::gradient_descent_from_raw;
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
     #[test]
     fn test() {
+        init();
         let xs = Tensor::of_slice(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
         let ys = Tensor::of_slice(&[0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]);
         let trained = gradient_descent_from_raw(&xs, &ys, 200);
