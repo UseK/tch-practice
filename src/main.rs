@@ -7,8 +7,12 @@ fn main() -> Result<()> {
     debug!("debug!");
     error!("error!");
     info!("info!");
+    println!("println!");
+    dbg!(std::process::id());
+    dbg!(std::env::temp_dir());
     let m = tch::vision::mnist::load_dir("data")?;
     let model = run_adam(&m, 50)?;
+
     println!("{:#?}", model);
     Ok(())
 }
