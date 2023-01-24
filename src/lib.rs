@@ -227,7 +227,7 @@ mod tests {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         buf.hash(&mut hasher);
         let filename = std::env::temp_dir().join(format!(
-            "pytorch-tch-{}-{}.csv",
+            "annotation-{}-{}.csv",
             std::process::id(),
             hasher.finish()
         ));
