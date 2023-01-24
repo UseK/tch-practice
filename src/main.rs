@@ -12,7 +12,11 @@ fn main() -> Result<()> {
 
 fn run() -> Result<()> {
     // let m = tch::vision::mnist::load_dir("data")?;
-    let m = pytorch_tch::load_datasets("data/mydata/images", "data/mydata/annotation_0_1.csv")?;
+    let m = pytorch_tch::load_datasets(
+        "data/mydata/images",
+        "data/mydata/annotation_0_1.csv",
+        Some(|t: tch::Tensor| t.flatten(1, 3).internal_cast_float(true)),
+    )?;
     let model = pytorch_tch::run_adam(&m, 50)?;
 
     println!("{:#?}", model);

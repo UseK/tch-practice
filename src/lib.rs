@@ -86,13 +86,17 @@ pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
     Ok(net)
 }
 
-pub fn load_datasets<T>(image_dir: T, annotation_path: T) -> Result<Dataset>
+pub fn load_datasets<T, F>(
+    image_dir: T,
+    annotation_path: T,
+    transform: Option<F>,
+) -> Result<Dataset>
 where
     T: AsRef<std::path::Path>,
+    F: Fn(Tensor) -> Tensor,
 {
-    const SIZE: i64 = 512;
-    let train_images = image::load_dir(&image_dir, SIZE, SIZE)?;
-    let test_images = image::load_dir(&image_dir, SIZE, SIZE)?;
+    let train_images = load_dir_and_transform(&image_dir, &transform)?;
+    let test_images = load_dir_and_transform(&image_dir, &transform)?;
     let train_labels = load_annotations_with_no_header(&annotation_path)?;
     let test_labels = load_annotations_with_no_header(&annotation_path)?;
 
@@ -101,8 +105,22 @@ where
         train_labels,
         test_images,
         test_labels,
-        labels: 2,
+        labels: 2, //TODO: calc from labels
     })
+}
+
+fn load_dir_and_transform<T, F>(image_dir: T, transform: &Option<F>) -> Result<Tensor>
+where
+    T: AsRef<std::path::Path>,
+    F: Fn(Tensor) -> Tensor,
+{
+    const SIZE: i64 = 512;
+    let tensor = image::load_dir(&image_dir, SIZE, SIZE)?;
+    if let Some(f) = transform {
+        Ok(f(tensor))
+    } else {
+        Ok(tensor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
