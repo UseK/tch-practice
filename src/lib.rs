@@ -2,15 +2,16 @@ use anyhow::Result;
 use log::debug;
 use serde::Deserialize;
 use tch::{
-    kind,
-    nn::{self, Module, OptimizerConfig},
+    kind::Kind,
+    nn,
+    nn::{Module, OptimizerConfig},
     vision::dataset::Dataset,
-    Device, Kind, Tensor,
+    Device, Tensor,
 };
 
-use tch::vision::image::load_and_resize;
+use tch::vision::image;
 
-pub fn perceptron_like(p: nn::Path, dim: i64) -> impl nn::Module {
+pub fn perceptron_like(p: nn::Path, dim: i64) -> impl Module {
     let x1 = p.zeros("x1", &[dim]);
     let x2 = p.zeros("x2", &[dim]);
     nn::func(move |xs| {
@@ -33,14 +34,14 @@ pub fn nn_seq_like(vs: &nn::Path, in_dim: i64, out_dim: i64) -> impl Module {
         .add(nn::linear(vs, HIDDEN_NODES, out_dim, Default::default()))
 }
 
-pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl nn::Module {
+pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl Module {
     let vs = nn::VarStore::new(Device::Cpu);
     let my_module = perceptron_like(vs.root(), 7);
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
     for epoch in 1..=epochs {
         let loss = (my_module.forward(xs) - ys)
             .pow_tensor_scalar(2)
-            .sum(kind::Kind::Float);
+            .sum(Kind::Float);
 
         if epoch % 100 == 0 {
             println!("\nepoch: {}/{}", epoch, epochs);
@@ -51,12 +52,19 @@ pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl nn::M
     my_module
 }
 
-const IMAGE_DIM: i64 = 784;
-const LABELS: i64 = 10;
+pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
+    dbg!(m.labels);
 
-pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl nn::Module> {
+    dbg!(m.train_images.kind());
+    dbg!(m.train_labels.kind());
+    dbg!(m.test_images.kind());
+    dbg!(m.test_labels.kind());
+
+    dbg!(m.train_images.dim());
+    dbg!(m.train_images.size());
+    let (_, in_dim) = m.train_images.size2()?;
     let vs = nn::VarStore::new(Device::Cpu);
-    let net = nn_seq_like(&vs.root(), IMAGE_DIM, LABELS);
+    let net = nn_seq_like(&vs.root(), in_dim, m.labels);
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
     for epoch in 0..epochs {
         let loss = net
@@ -66,10 +74,10 @@ pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl nn::Module> {
         let test_accuracy = net
             .forward(&m.test_images)
             .accuracy_for_logits(&m.test_labels);
-        if epoch % 50 == 0 {
+        if epoch % 10 == 0 {
             println!(
                 "epoch: {:4} train loss: {:8.5} test acc: {:5.2}%",
-                epoch + 1,
+                epoch,
                 f64::from(&loss),
                 100. * f64::from(&test_accuracy),
             );
@@ -78,15 +86,15 @@ pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl nn::Module> {
     Ok(net)
 }
 
-pub fn load_datasets<T>(image_path: T, annotation_path: T) -> Result<Dataset>
+pub fn load_datasets<T>(image_dir: T, annotation_path: T) -> Result<Dataset>
 where
     T: AsRef<std::path::Path>,
 {
     const SIZE: i64 = 512;
-    let train_images = load_and_resize(&image_path, SIZE, SIZE)?;
-    let test_images = load_and_resize(&image_path, SIZE, SIZE)?;
-    let train_labels = load_annotations_with_header(&annotation_path)?;
-    let test_labels = load_annotations_with_header(&annotation_path)?;
+    let train_images = image::load_dir(&image_dir, SIZE, SIZE)?;
+    let test_images = image::load_dir(&image_dir, SIZE, SIZE)?;
+    let train_labels = load_annotations_with_no_header(&annotation_path)?;
+    let test_labels = load_annotations_with_no_header(&annotation_path)?;
 
     Ok(Dataset {
         train_images,
@@ -98,9 +106,9 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-struct Annotation {
-    filename: std::path::PathBuf,
-    label: i64,
+pub struct Annotation {
+    pub filename: std::path::PathBuf,
+    pub label: i64,
 }
 
 pub fn load_annotations_with_header<T>(annotations_path: T) -> Result<Tensor>
@@ -139,14 +147,8 @@ mod tests {
         hash::{Hash, Hasher},
         io::Write,
     };
-
-    use tch::nn::Module;
     use tch::Tensor;
-
-    use crate::{
-        load_annotations_with_header, load_annotations_with_no_header, run_adam,
-        run_gradient_descent,
-    };
+    use tch::{nn::Module, vision::dataset::Dataset};
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -157,7 +159,7 @@ mod tests {
         init();
         let xs = Tensor::of_slice(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
         let ys = Tensor::of_slice(&[0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]);
-        let trained = run_gradient_descent(&xs, &ys, 200);
+        let trained = crate::run_gradient_descent(&xs, &ys, 200);
         let forwarded = trained.forward(&xs);
         let expected = Tensor::of_slice(&[
             0.5894472002983093,
@@ -172,10 +174,35 @@ mod tests {
     }
 
     #[test]
-    fn test_run_adam() {
+    fn test_run_adam_with_mnist() {
         init();
         let m = tch::vision::mnist::load_dir("data").unwrap();
-        let _ = run_adam(&m, 1);
+        crate::run_adam(&m, 1).unwrap();
+    }
+
+    #[test]
+    fn test_run_adam_to_error_with_1_dimension() {
+        init();
+        let m = Dataset {
+            train_images: Tensor::of_slice(&[0.0, 0.1, 0.2]),
+            train_labels: Tensor::of_slice(&[0]),
+            test_images: Tensor::of_slice(&[0]),
+            test_labels: Tensor::of_slice(&[0]),
+            labels: 99,
+        };
+        assert!(crate::run_adam(&m, 99).is_err());
+    }
+
+    #[test]
+    fn test_run_adam_with_2_dimension() {
+        let m = Dataset {
+            train_images: Tensor::of_slice2(&[&[0.0f32, 0.1, 0.2], &[0.3, 0.4, 0.5]]),
+            train_labels: Tensor::of_slice(&[0i64, 1]),
+            test_images: Tensor::of_slice2(&[&[0.0f32, 0.1, 0.2], &[0.3, 0.4, 0.5]]),
+            test_labels: Tensor::of_slice(&[0i64, 1]),
+            labels: 99,
+        };
+        assert!(crate::run_adam(&m, 99).is_ok());
     }
 
     fn get_temp_file(buf: &[u8]) -> std::path::PathBuf {
@@ -196,14 +223,14 @@ mod tests {
     #[test]
     fn test_load_annotations() {
         let filename = get_temp_file(b"filename,label\n000001.jpg,0\n000002.jpg,1");
-        let tensor = load_annotations_with_header(&filename).unwrap();
+        let tensor = crate::load_annotations_with_header(&filename).unwrap();
         assert_eq!(tensor, Tensor::of_slice(&[0, 1]));
     }
 
     #[test]
     fn test_load_annotations_with_no_header() {
         let filename = get_temp_file(b"000001.jpg,0\n000002.jpg,1");
-        let tensor = load_annotations_with_no_header(&filename).unwrap();
+        let tensor = crate::load_annotations_with_no_header(&filename).unwrap();
         assert_eq!(tensor, Tensor::of_slice(&[0, 1]));
     }
 }

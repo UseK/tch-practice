@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{debug, error, info};
-use pytorch_tch::run_adam;
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -8,10 +7,13 @@ fn main() -> Result<()> {
     error!("error!");
     info!("info!");
     println!("println!");
-    dbg!(std::process::id());
-    dbg!(std::env::temp_dir());
-    let m = tch::vision::mnist::load_dir("data")?;
-    let model = run_adam(&m, 50)?;
+    run()
+}
+
+fn run() -> Result<()> {
+    // let m = tch::vision::mnist::load_dir("data")?;
+    let m = pytorch_tch::load_datasets("data/mydata/images", "data/mydata/annotation_0_1.csv")?;
+    let model = pytorch_tch::run_adam(&m, 50)?;
 
     println!("{:#?}", model);
     Ok(())
