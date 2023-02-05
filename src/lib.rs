@@ -1,4 +1,6 @@
+mod config;
 use anyhow::Result;
+use config::MY_DEVICE;
 use log::debug;
 use serde::Deserialize;
 use tch::{
@@ -6,7 +8,7 @@ use tch::{
     nn,
     nn::{Module, OptimizerConfig},
     vision::dataset::Dataset,
-    Device, Tensor,
+    Tensor,
 };
 
 use tch::vision::image;
@@ -35,7 +37,7 @@ pub fn nn_seq_like(vs: &nn::Path, in_dim: i64, out_dim: i64) -> impl Module {
 }
 
 pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl Module {
-    let vs = nn::VarStore::new(Device::Cpu);
+    let vs = nn::VarStore::new(MY_DEVICE);
     let my_module = perceptron_like(vs.root(), 7);
     let mut opt = nn::Sgd::default().build(&vs, 1e-2).unwrap();
     for epoch in 1..=epochs {
@@ -63,7 +65,7 @@ pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
     dbg!(m.train_images.dim());
     dbg!(m.train_images.size());
     let (_, in_dim) = m.train_images.size2()?;
-    let vs = nn::VarStore::new(Device::Cpu);
+    let vs = nn::VarStore::new(MY_DEVICE);
     let net = nn_seq_like(&vs.root(), in_dim, m.labels);
     let mut opt = nn::Adam::default().build(&vs, 1e-3)?;
     for epoch in 0..epochs {
@@ -95,10 +97,10 @@ where
     T: AsRef<std::path::Path>,
     F: Fn(Tensor) -> Tensor,
 {
-    let train_images = load_dir_and_transform(&image_dir, &transform)?;
-    let test_images = load_dir_and_transform(&image_dir, &transform)?;
-    let train_labels = load_annotations_with_no_header(&annotation_path)?;
-    let test_labels = load_annotations_with_no_header(&annotation_path)?;
+    let train_images = load_dir_and_transform(&image_dir, &transform)?.to_device(MY_DEVICE);
+    let test_images = load_dir_and_transform(&image_dir, &transform)?.to_device(MY_DEVICE);
+    let train_labels = load_annotations_with_no_header(&annotation_path)?.to_device(MY_DEVICE);
+    let test_labels = load_annotations_with_no_header(&annotation_path)?.to_device(MY_DEVICE);
 
     Ok(Dataset {
         train_images,
@@ -159,6 +161,22 @@ where
     Ok(Tensor::of_slice(&labels).to_kind(Kind::Int64))
 }
 
+trait ToDevice {
+    fn to_device(&self, device: tch::Device) -> Self;
+}
+
+impl ToDevice for Dataset {
+    fn to_device(&self, device: tch::Device) -> Self {
+        Self {
+            train_images: self.train_images.to_device(device),
+            train_labels: self.train_labels.to_device(device),
+            test_images: self.test_images.to_device(device),
+            test_labels: self.test_labels.to_device(device),
+            labels: self.labels,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -168,6 +186,8 @@ mod tests {
     use tch::Tensor;
     use tch::{nn::Module, vision::dataset::Dataset};
 
+    use crate::{config::MY_DEVICE, ToDevice};
+
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
     }
@@ -175,8 +195,8 @@ mod tests {
     #[test]
     fn test_run_gradient_descent() {
         init();
-        let xs = Tensor::of_slice(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
-        let ys = Tensor::of_slice(&[0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]);
+        let xs = Tensor::of_slice(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).to_device(MY_DEVICE);
+        let ys = Tensor::of_slice(&[0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]).to_device(MY_DEVICE);
         let trained = crate::run_gradient_descent(&xs, &ys, 200);
         let forwarded = trained.forward(&xs);
         let expected = Tensor::of_slice(&[
@@ -194,7 +214,7 @@ mod tests {
     #[test]
     fn test_run_adam_with_mnist() {
         init();
-        let m = tch::vision::mnist::load_dir("data").unwrap();
+        let m = tch::vision::mnist::load_dir("data").unwrap().to_device(MY_DEVICE);
         crate::run_adam(&m, 1).unwrap();
     }
 
@@ -219,7 +239,7 @@ mod tests {
             test_images: Tensor::of_slice2(&[&[0.0f32, 0.1, 0.2], &[0.3, 0.4, 0.5]]),
             test_labels: Tensor::of_slice(&[0i64, 1]),
             labels: 99,
-        };
+        }.to_device(MY_DEVICE);
         assert!(crate::run_adam(&m, 99).is_ok());
     }
 
