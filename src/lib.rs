@@ -216,7 +216,7 @@ mod tests {
             0.19998866544379637,
             0.09999951477228386,
             0.0,
-        ]);
+        ]).to_device(MY_DEVICE);
         tensor_assert_eq(&forwarded, &expected);
     }
 
