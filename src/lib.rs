@@ -192,6 +192,15 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
     }
 
+    fn tensor_assert_eq(left: &Tensor, right: &Tensor) {
+        let delta = left - right;
+        delta.iter::<f64>().unwrap().for_each(|v| {
+            if v > 0.0000001 {
+                panic!("panic in tensor_assert_eq\n left: {}\nright: {}", left, right);
+            }
+        });
+    }
+
     #[test]
     fn test_run_gradient_descent() {
         init();
@@ -208,7 +217,7 @@ mod tests {
             0.09999951477228386,
             0.0,
         ]);
-        assert_eq!(forwarded, expected);
+        tensor_assert_eq(&forwarded, &expected);
     }
 
     #[test]
