@@ -5,10 +5,10 @@ use log::debug;
 use serde::Deserialize;
 use tch::{
     kind::Kind,
-    nn,
+    nn::{self, ModuleT},
     nn::{Module, OptimizerConfig},
     vision::dataset::Dataset,
-    Tensor,
+    Device, Tensor,
 };
 
 use tch::vision::image;
@@ -52,6 +52,85 @@ pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl Modul
         opt.backward_step(&loss);
     }
     my_module
+}
+
+pub struct CNNNet {}
+
+pub trait ModuleAlgorithm {
+    fn into_module(self, vs: &nn::Path) -> Box<dyn Module>;
+}
+
+impl ModuleAlgorithm for CNNNet {
+    fn into_module(self, vs: &nn::Path) -> Box<dyn Module> {
+        Box::new(Net::new(vs))
+    }
+}
+
+#[derive(Debug)]
+pub struct Net {
+    conv1: nn::Conv2D,
+    conv2: nn::Conv2D,
+    fc1: nn::Linear,
+    fc2: nn::Linear,
+}
+
+impl Net {
+    fn new(vs: &nn::Path) -> Net {
+        let conv1 = nn::conv2d(vs, 1, 32, 5, Default::default());
+        let conv2 = nn::conv2d(vs, 32, 64, 5, Default::default());
+        let fc1 = nn::linear(vs, 1024, 1024, Default::default());
+        let fc2 = nn::linear(vs, 1024, 10, Default::default());
+        Net {
+            conv1,
+            conv2,
+            fc1,
+            fc2,
+        }
+    }
+}
+
+impl nn::Module for Net {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        xs.view([-1, 1, 28, 28])
+            .apply(&self.conv1)
+            .max_pool2d_default(2)
+            .apply(&self.conv2)
+            .max_pool2d_default(2)
+            .view([-1, 1024])
+            .apply(&self.fc1)
+            .relu()
+            .apply(&self.fc2)
+    }
+}
+
+pub fn train(
+    m: &Dataset,
+    module_algorithm: impl ModuleAlgorithm,
+    opt_config: impl OptimizerConfig,
+    device: Device,
+    epochs: usize,
+) -> Result<Box<dyn Module>> {
+    let vs = nn::VarStore::new(device);
+    let mut opt = opt_config.build(&vs, 1e-3)?;
+    let module = module_algorithm.into_module(&vs.root());
+    for epoch in 0..epochs {
+        let loss = module
+            .forward(&m.train_images)
+            .cross_entropy_for_logits(&m.train_labels);
+        opt.backward_step(&loss);
+        let test_accuracy = module
+            .forward(&m.test_images)
+            .accuracy_for_logits(&m.test_labels);
+        if epoch % 10 == 0 {
+            println!(
+                "epoch: {:4} train loss: {:8.5} test acc: {:5.2}%",
+                epoch,
+                f64::from(&loss),
+                100. * f64::from(&test_accuracy),
+            );
+        }
+    }
+    Ok(module)
 }
 
 pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
@@ -186,7 +265,8 @@ mod tests {
     use tch::Tensor;
     use tch::{nn::Module, vision::dataset::Dataset};
 
-    use crate::{config::MY_DEVICE, ToDevice};
+    use super::train;
+    use crate::{config::MY_DEVICE, CNNNet, Net, ToDevice};
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -196,7 +276,10 @@ mod tests {
         let delta = left - right;
         delta.iter::<f64>().unwrap().for_each(|v| {
             if v > 0.0000001 {
-                panic!("panic in tensor_assert_eq\n left: {}\nright: {}", left, right);
+                panic!(
+                    "panic in tensor_assert_eq\n left: {}\nright: {}",
+                    left, right
+                );
             }
         });
     }
@@ -216,14 +299,17 @@ mod tests {
             0.19998866544379637,
             0.09999951477228386,
             0.0,
-        ]).to_device(MY_DEVICE);
+        ])
+        .to_device(MY_DEVICE);
         tensor_assert_eq(&forwarded, &expected);
     }
 
     #[test]
     fn test_run_adam_with_mnist() {
         init();
-        let m = tch::vision::mnist::load_dir("data").unwrap().to_device(MY_DEVICE);
+        let m = tch::vision::mnist::load_dir("data")
+            .unwrap()
+            .to_device(MY_DEVICE);
         crate::run_adam(&m, 1).unwrap();
     }
 
@@ -242,14 +328,31 @@ mod tests {
 
     #[test]
     fn test_run_adam_with_2_dimension() {
-        let m = Dataset {
+        let m = gen_2dim_dataset();
+        assert!(crate::run_adam(&m, 99).is_ok());
+    }
+
+    #[test]
+    fn test_train() {
+        let m = gen_2dim_dataset();
+        let model = train(
+            &m,
+            CNNNet {},
+            tch::nn::Adam::default(),
+            tch::Device::Cpu,
+            50,
+        );
+    }
+
+    fn gen_2dim_dataset() -> Dataset {
+        Dataset {
             train_images: Tensor::of_slice2(&[&[0.0f32, 0.1, 0.2], &[0.3, 0.4, 0.5]]),
             train_labels: Tensor::of_slice(&[0i64, 1]),
             test_images: Tensor::of_slice2(&[&[0.0f32, 0.1, 0.2], &[0.3, 0.4, 0.5]]),
             test_labels: Tensor::of_slice(&[0i64, 1]),
             labels: 99,
-        }.to_device(MY_DEVICE);
-        assert!(crate::run_adam(&m, 99).is_ok());
+        }
+        .to_device(MY_DEVICE)
     }
 
     fn get_temp_file(buf: &[u8]) -> std::path::PathBuf {
