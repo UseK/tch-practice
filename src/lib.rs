@@ -60,11 +60,11 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(vs: &nn::Path) -> Net {
+    pub fn new(vs: &nn::Path, dataset: &Dataset) -> Net {
         let conv1 = nn::conv2d(vs, 1, 32, 5, Default::default());
         let conv2 = nn::conv2d(vs, 32, 64, 5, Default::default());
         let fc1 = nn::linear(vs, 1024, 1024, Default::default());
-        let fc2 = nn::linear(vs, 1024, 10, Default::default());
+        let fc2 = nn::linear(vs, 1024, dataset.labels, Default::default());
         Net {
             conv1,
             conv2,
@@ -96,12 +96,12 @@ pub fn train<F, M>(
     epochs: usize,
 ) -> Result<M>
 where
-    F: Fn(&nn::Path) -> M,
+    F: Fn(&nn::Path, &Dataset) -> M,
     M: Module,
 {
     let vs = nn::VarStore::new(device);
     let mut opt = opt_config.build(&vs, 1e-3)?;
-    let module = module_f(&vs.root());
+    let module = module_f(&vs.root(), dataset);
     for epoch in 0..epochs {
         let loss = module
             .forward(&dataset.train_images)
@@ -161,7 +161,11 @@ mod tests {
     use tch::{nn::VarStore, Kind, Tensor};
 
     use super::train;
-    use crate::{config::MY_DEVICE, data_loader::{ToDevice, gen_random_dataset}, nn_seq_like};
+    use crate::{
+        config::MY_DEVICE,
+        data_loader::{gen_random_dataset, ToDevice},
+        nn_seq_like,
+    };
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -228,13 +232,27 @@ mod tests {
     }
 
     #[test]
+    fn test_cnn() {
+        for labels in 1..=4 {
+            let vs = VarStore::new(tch::Device::Cpu);
+            let dataset = gen_random_dataset(22, 33, labels);
+            let model = super::Net::new(&vs.root(), &dataset);
+            let forwarded = model.forward(&dataset.test_images);
+            assert_eq!(
+                forwarded.size(),
+                &[dataset.test_images.size()[0], dataset.labels]
+            );
+            assert_eq!(forwarded.kind(), Kind::Float);
+        }
+    }
+
+    #[test]
     fn test_train() -> anyhow::Result<()> {
         let m = gen_2dim_dataset();
-
         let (_, in_dim) = m.train_images.size2().unwrap();
         let model = train(
             &m,
-            |vs| nn_seq_like(vs, in_dim, m.labels),
+            |vs, dataset| nn_seq_like(vs, in_dim, dataset.labels),
             tch::nn::Adam::default(),
             tch::Device::Cpu,
             50,
@@ -246,18 +264,8 @@ mod tests {
     }
 
     #[test]
-    fn test_cnn() {
-        let vs = VarStore::new(tch::Device::Cpu);
-        let dataset = gen_random_dataset(22, 33, 10);
-        let model = super::Net::new(&vs.root());
-        let forwarded = model.forward(&dataset.test_images);
-        assert_eq!(forwarded.size(), &[dataset.test_images.size()[0], dataset.labels]);
-        assert_eq!(forwarded.kind(), Kind::Float);
-    }
-
-    #[test]
     fn test_train_cnn() -> anyhow::Result<()> {
-        let dataset = gen_random_dataset(22, 33, 10);
+        let dataset = gen_random_dataset(22, 33, 77);
         let model = train(
             &dataset,
             crate::Net::new,
@@ -266,11 +274,13 @@ mod tests {
             50,
         )?;
         let forwarded = model.forward(&dataset.test_images);
-        assert_eq!(forwarded.size(), &[dataset.test_images.size()[0], dataset.labels]);
+        assert_eq!(
+            forwarded.size(),
+            &[dataset.test_images.size()[0], dataset.labels]
+        );
         assert_eq!(forwarded.kind(), Kind::Float);
         Ok(())
     }
-
 
     fn gen_2dim_dataset() -> Dataset {
         Dataset {
