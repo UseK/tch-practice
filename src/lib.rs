@@ -5,8 +5,7 @@ use log::debug;
 use serde::Deserialize;
 use tch::{
     kind::Kind,
-    nn::{self, ModuleT},
-    nn::{Module, OptimizerConfig},
+    nn::{self, Module, OptimizerConfig},
     vision::dataset::Dataset,
     Device, Tensor,
 };
@@ -54,18 +53,6 @@ pub fn run_gradient_descent(xs: &Tensor, ys: &Tensor, epochs: u32) -> impl Modul
     my_module
 }
 
-pub struct CNNNet {}
-
-pub trait ModuleAlgorithm {
-    fn into_module(self, vs: &nn::Path) -> Box<dyn Module>;
-}
-
-impl ModuleAlgorithm for CNNNet {
-    fn into_module(self, vs: &nn::Path) -> Box<dyn Module> {
-        Box::new(Net::new(vs))
-    }
-}
-
 #[derive(Debug)]
 pub struct Net {
     conv1: nn::Conv2D,
@@ -75,7 +62,7 @@ pub struct Net {
 }
 
 impl Net {
-    fn new(vs: &nn::Path) -> Net {
+    pub fn new(vs: &nn::Path) -> Net {
         let conv1 = nn::conv2d(vs, 1, 32, 5, Default::default());
         let conv2 = nn::conv2d(vs, 32, 64, 5, Default::default());
         let fc1 = nn::linear(vs, 1024, 1024, Default::default());
@@ -103,16 +90,20 @@ impl nn::Module for Net {
     }
 }
 
-pub fn train(
+pub fn train<F, M>(
     m: &Dataset,
-    module_algorithm: impl ModuleAlgorithm,
+    module_f: F,
     opt_config: impl OptimizerConfig,
     device: Device,
     epochs: usize,
-) -> Result<Box<dyn Module>> {
+) -> Result<M>
+where
+    F: Fn(&nn::Path) -> M,
+    M: Module,
+{
     let vs = nn::VarStore::new(device);
     let mut opt = opt_config.build(&vs, 1e-3)?;
-    let module = module_algorithm.into_module(&vs.root());
+    let module = module_f(&vs.root());
     for epoch in 0..epochs {
         let loss = module
             .forward(&m.train_images)
@@ -135,7 +126,6 @@ pub fn train(
 
 pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
     dbg!(m.labels);
-
     dbg!(m.train_images.kind());
     dbg!(m.train_labels.kind());
     dbg!(m.test_images.kind());
@@ -262,11 +252,11 @@ mod tests {
         hash::{Hash, Hasher},
         io::Write,
     };
-    use tch::Tensor;
     use tch::{nn::Module, vision::dataset::Dataset};
+    use tch::{nn::VarStore, Kind, Tensor};
 
     use super::train;
-    use crate::{config::MY_DEVICE, CNNNet, Net, ToDevice};
+    use crate::{config::MY_DEVICE, nn_seq_like, ToDevice};
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -333,15 +323,40 @@ mod tests {
     }
 
     #[test]
-    fn test_train() {
+    fn test_train() -> anyhow::Result<()> {
         let m = gen_2dim_dataset();
+
+        let (_, in_dim) = m.train_images.size2().unwrap();
         let model = train(
             &m,
-            CNNNet {},
+            |vs| nn_seq_like(vs, in_dim, m.labels),
             tch::nn::Adam::default(),
             tch::Device::Cpu,
             50,
-        );
+        )?;
+        let _ = model.forward(&m.test_images);
+        Ok(())
+    }
+
+    #[test]
+    fn test_cnn() {
+        let vs = VarStore::new(tch::Device::Cpu);
+        let m = gen_random_dataset();
+        let model = super::Net::new(&vs.root());
+        let forwarded = model.forward(&m.test_images);
+        assert_eq!(forwarded.size(), &[1, 10]);
+        assert_eq!(forwarded.kind(), Kind::Float);
+    }
+
+    fn gen_random_dataset() -> Dataset {
+        Dataset {
+            train_images: Tensor::rand(&[1, 1, 28, 28], (Kind::Float, MY_DEVICE)),
+            train_labels: Tensor::rand(&[10], (Kind::Float, MY_DEVICE)),
+            test_images: Tensor::rand(&[1, 1, 28, 28], (Kind::Float, MY_DEVICE)),
+            test_labels: Tensor::rand(&[10], (Kind::Float, MY_DEVICE)),
+            labels: 10,
+        }
+        .to_device(MY_DEVICE)
     }
 
     fn gen_2dim_dataset() -> Dataset {
