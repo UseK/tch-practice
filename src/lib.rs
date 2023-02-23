@@ -89,7 +89,7 @@ impl nn::Module for Net {
 }
 
 pub fn train<F, M>(
-    m: &Dataset,
+    dataset: &Dataset,
     module_f: F,
     opt_config: impl OptimizerConfig,
     device: Device,
@@ -104,12 +104,12 @@ where
     let module = module_f(&vs.root());
     for epoch in 0..epochs {
         let loss = module
-            .forward(&m.train_images)
-            .cross_entropy_for_logits(&m.train_labels);
+            .forward(&dataset.train_images)
+            .cross_entropy_for_logits(&dataset.train_labels);
         opt.backward_step(&loss);
         let test_accuracy = module
-            .forward(&m.test_images)
-            .accuracy_for_logits(&m.test_labels);
+            .forward(&dataset.test_images)
+            .accuracy_for_logits(&dataset.test_labels);
         if epoch % 10 == 0 {
             println!(
                 "epoch: {:4} train loss: {:8.5} test acc: {:5.2}%",
@@ -161,7 +161,7 @@ mod tests {
     use tch::{nn::VarStore, Kind, Tensor};
 
     use super::train;
-    use crate::{config::MY_DEVICE, data_loader::ToDevice, nn_seq_like};
+    use crate::{config::MY_DEVICE, data_loader::{ToDevice, gen_random_dataset}, nn_seq_like};
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -239,30 +239,38 @@ mod tests {
             tch::Device::Cpu,
             50,
         )?;
-        let _ = model.forward(&m.test_images);
+        let forwarded = model.forward(&m.test_images);
+        assert_eq!(forwarded.size(), &[m.test_images.size()[0], m.labels]);
+        assert_eq!(forwarded.kind(), Kind::Float);
         Ok(())
     }
 
     #[test]
     fn test_cnn() {
         let vs = VarStore::new(tch::Device::Cpu);
-        let m = gen_random_dataset();
+        let dataset = gen_random_dataset(22, 33, 10);
         let model = super::Net::new(&vs.root());
-        let forwarded = model.forward(&m.test_images);
-        assert_eq!(forwarded.size(), &[1, 10]);
+        let forwarded = model.forward(&dataset.test_images);
+        assert_eq!(forwarded.size(), &[dataset.test_images.size()[0], dataset.labels]);
         assert_eq!(forwarded.kind(), Kind::Float);
     }
 
-    fn gen_random_dataset() -> Dataset {
-        Dataset {
-            train_images: Tensor::rand(&[1, 1, 28, 28], (Kind::Float, MY_DEVICE)),
-            train_labels: Tensor::rand(&[10], (Kind::Float, MY_DEVICE)),
-            test_images: Tensor::rand(&[1, 1, 28, 28], (Kind::Float, MY_DEVICE)),
-            test_labels: Tensor::rand(&[10], (Kind::Float, MY_DEVICE)),
-            labels: 10,
-        }
-        .to_device(MY_DEVICE)
+    #[test]
+    fn test_train_cnn() -> anyhow::Result<()> {
+        let dataset = gen_random_dataset(22, 33, 10);
+        let model = train(
+            &dataset,
+            crate::Net::new,
+            tch::nn::Adam::default(),
+            tch::Device::Cpu,
+            50,
+        )?;
+        let forwarded = model.forward(&dataset.test_images);
+        assert_eq!(forwarded.size(), &[dataset.test_images.size()[0], dataset.labels]);
+        assert_eq!(forwarded.kind(), Kind::Float);
+        Ok(())
     }
+
 
     fn gen_2dim_dataset() -> Dataset {
         Dataset {

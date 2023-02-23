@@ -95,14 +95,28 @@ impl ToDevice for Dataset {
         }
     }
 }
+
+pub fn gen_random_dataset(train_size: i64, test_size: i64, labels: i64) -> Dataset {
+    Dataset {
+        train_images: Tensor::rand(&[train_size, 1, 28, 28], (Kind::Float, MY_DEVICE)),
+        train_labels: Tensor::randint(labels, &[train_size], (Kind::Int64, MY_DEVICE)),
+        test_images: Tensor::rand(&[test_size, 1, 28, 28], (Kind::Float, MY_DEVICE)),
+        test_labels: Tensor::randint(labels, &[test_size], (Kind::Int64, MY_DEVICE)),
+        labels,
+    }
+    .to_device(MY_DEVICE)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::data_loader::{load_annotations_with_header, load_annotations_with_no_header};
+    use crate::data_loader::{
+        gen_random_dataset, load_annotations_with_header, load_annotations_with_no_header,
+    };
     use std::{
         hash::{Hash, Hasher},
         io::Write,
     };
-    use tch::{vision::mnist, Tensor};
+    use tch::{vision::mnist, Kind, Tensor};
 
     #[test]
     fn test_mnist() {
@@ -112,6 +126,36 @@ mod tests {
         assert_eq!(mnist.test_images.size(), &[10000, 28 * 28]);
         assert_eq!(mnist.test_labels.size(), &[10000]);
         assert_eq!(mnist.labels, 10);
+
+        assert_eq!(mnist.train_images.kind(), Kind::Float);
+        assert_eq!(mnist.test_images.kind(), Kind::Float);
+
+        assert_eq!(mnist.train_labels.kind(), Kind::Int64);
+        assert_eq!(mnist.test_labels.kind(), Kind::Int64);
+    }
+
+    #[test]
+    fn test_gen_random_dataset() {
+        let dataset = gen_random_dataset(55, 66, 77);
+        println!(
+            "{:#?}",
+            dataset
+                .train_labels
+                .iter::<i64>()
+                .unwrap()
+                .collect::<Vec<i64>>()
+        );
+        assert_eq!(dataset.train_images.size(), &[55, 1, 28, 28]);
+        assert_eq!(dataset.train_labels.size(), &[55]);
+        assert_eq!(dataset.test_images.size(), &[66, 1, 28, 28]);
+        assert_eq!(dataset.test_labels.size(), &[66]);
+        assert_eq!(dataset.labels, 77);
+
+        assert_eq!(dataset.train_images.kind(), Kind::Float);
+        assert_eq!(dataset.test_images.kind(), Kind::Float);
+
+        assert_eq!(dataset.train_labels.kind(), Kind::Int64);
+        assert_eq!(dataset.test_labels.kind(), Kind::Int64);
     }
 
     #[test]
