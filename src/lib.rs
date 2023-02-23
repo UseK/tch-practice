@@ -1,16 +1,14 @@
-mod config;
+pub mod config;
+pub mod data_loader;
 use anyhow::Result;
 use config::MY_DEVICE;
 use log::debug;
-use serde::Deserialize;
 use tch::{
     kind::Kind,
     nn::{self, Module, OptimizerConfig},
     vision::dataset::Dataset,
     Device, Tensor,
 };
-
-use tch::vision::image;
 
 pub fn perceptron_like(p: nn::Path, dim: i64) -> impl Module {
     let x1 = p.zeros("x1", &[dim]);
@@ -157,106 +155,13 @@ pub fn run_adam(m: &Dataset, epochs: u32) -> Result<impl Module> {
     Ok(net)
 }
 
-pub fn load_datasets<T, F>(
-    image_dir: T,
-    annotation_path: T,
-    transform: Option<F>,
-) -> Result<Dataset>
-where
-    T: AsRef<std::path::Path>,
-    F: Fn(Tensor) -> Tensor,
-{
-    let train_images = load_dir_and_transform(&image_dir, &transform)?.to_device(MY_DEVICE);
-    let test_images = load_dir_and_transform(&image_dir, &transform)?.to_device(MY_DEVICE);
-    let train_labels = load_annotations_with_no_header(&annotation_path)?.to_device(MY_DEVICE);
-    let test_labels = load_annotations_with_no_header(&annotation_path)?.to_device(MY_DEVICE);
-
-    Ok(Dataset {
-        train_images,
-        train_labels,
-        test_images,
-        test_labels,
-        labels: 2, //TODO: calc from labels
-    })
-}
-
-fn load_dir_and_transform<T, F>(image_dir: T, transform: &Option<F>) -> Result<Tensor>
-where
-    T: AsRef<std::path::Path>,
-    F: Fn(Tensor) -> Tensor,
-{
-    const SIZE: i64 = 512;
-    let tensor = image::load_dir(&image_dir, SIZE, SIZE)?;
-    if let Some(f) = transform {
-        Ok(f(tensor))
-    } else {
-        Ok(tensor)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Annotation {
-    pub filename: std::path::PathBuf,
-    pub label: i64,
-}
-
-pub fn load_annotations_with_header<T>(annotations_path: T) -> Result<Tensor>
-where
-    T: AsRef<std::path::Path>,
-{
-    let reader = std::fs::File::open(annotations_path)?;
-    let mut csv_reader = csv::Reader::from_reader(reader);
-    let data: Vec<i64> = csv_reader
-        .deserialize::<Annotation>()
-        .map(|r| r.unwrap().label)
-        .collect();
-    Ok(Tensor::of_slice(&data).to_kind(Kind::Int64))
-}
-
-pub fn load_annotations_with_no_header<T>(annotations_path: T) -> Result<Tensor>
-where
-    T: AsRef<std::path::Path>,
-{
-    let reader = std::fs::File::open(annotations_path)?;
-    let mut csv_reader = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(reader);
-    let mut labels: Vec<i64> = vec![];
-    for r in csv_reader.records() {
-        let r: csv::StringRecord = r?;
-        let label = r.get(1).unwrap();
-        labels.push(label.parse::<i64>()?);
-    }
-    Ok(Tensor::of_slice(&labels).to_kind(Kind::Int64))
-}
-
-trait ToDevice {
-    fn to_device(&self, device: tch::Device) -> Self;
-}
-
-impl ToDevice for Dataset {
-    fn to_device(&self, device: tch::Device) -> Self {
-        Self {
-            train_images: self.train_images.to_device(device),
-            train_labels: self.train_labels.to_device(device),
-            test_images: self.test_images.to_device(device),
-            test_labels: self.test_labels.to_device(device),
-            labels: self.labels,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        hash::{Hash, Hasher},
-        io::Write,
-    };
     use tch::{nn::Module, vision::dataset::Dataset};
     use tch::{nn::VarStore, Kind, Tensor};
 
     use super::train;
-    use crate::{config::MY_DEVICE, nn_seq_like, ToDevice};
+    use crate::{config::MY_DEVICE, data_loader::ToDevice, nn_seq_like};
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -368,34 +273,5 @@ mod tests {
             labels: 99,
         }
         .to_device(MY_DEVICE)
-    }
-
-    fn get_temp_file(buf: &[u8]) -> std::path::PathBuf {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        buf.hash(&mut hasher);
-        let filename = std::env::temp_dir().join(format!(
-            "annotation-{}-{}.csv",
-            std::process::id(),
-            hasher.finish()
-        ));
-        {
-            let mut file = std::fs::File::create(&filename).unwrap();
-            file.write_all(buf).unwrap();
-        }
-        filename
-    }
-
-    #[test]
-    fn test_load_annotations() {
-        let filename = get_temp_file(b"filename,label\n000001.jpg,0\n000002.jpg,1");
-        let tensor = crate::load_annotations_with_header(&filename).unwrap();
-        assert_eq!(tensor, Tensor::of_slice(&[0, 1]));
-    }
-
-    #[test]
-    fn test_load_annotations_with_no_header() {
-        let filename = get_temp_file(b"000001.jpg,0\n000002.jpg,1");
-        let tensor = crate::load_annotations_with_no_header(&filename).unwrap();
-        assert_eq!(tensor, Tensor::of_slice(&[0, 1]));
     }
 }
