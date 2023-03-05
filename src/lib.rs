@@ -58,15 +58,17 @@ pub struct Net {
     fc1: nn::Linear,
     fc2: nn::Linear,
     view_size: [i64; 4],
+    p_size: i64,
 }
 
 impl Net {
     pub fn new(vs: &nn::Path, dataset: &Dataset) -> Net {
         let img_s = dataset.train_images.size();
+        let p_size = 64 * Self::processed_size(img_s[2]) * Self::processed_size(img_s[3]);
         assert_eq!(img_s.len(), 4);
         let conv1 = nn::conv2d(vs, img_s[1], 32, 5, Default::default());
         let conv2 = nn::conv2d(vs, 32, 64, 5, Default::default());
-        let fc1 = nn::linear(vs, 1024, 1024, Default::default());
+        let fc1 = nn::linear(vs, p_size, 1024, Default::default());
         let fc2 = nn::linear(vs, 1024, dataset.labels, Default::default());
         Net {
             conv1,
@@ -74,18 +76,30 @@ impl Net {
             fc1,
             fc2,
             view_size: [-1, img_s[1], img_s[2], img_s[3]],
+            p_size,
         }
+    }
+
+    fn processed_size(x: i64) -> i64 {
+        let x = (x - 4) / 2;
+        (x - 4) / 2
     }
 }
 
 impl nn::Module for Net {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        xs.view(self.view_size)
-            .apply(&self.conv1)
-            .max_pool2d_default(2)
-            .apply(&self.conv2)
-            .max_pool2d_default(2)
-            .view([-1, 1024])
+        debug!("{:#?}", xs);
+        let tmp = xs.view(self.view_size).apply(&self.conv1);
+        debug!("conv1: {:#?}", tmp);
+        let tmp = tmp.max_pool2d_default(2);
+        debug!("pool1: {:#?}", tmp);
+        let tmp = tmp.apply(&self.conv2);
+        debug!("conv2: {:#?}", tmp);
+        let tmp = tmp.max_pool2d_default(2);
+        debug!("pool2: {:#?}", tmp);
+        debug!("p_size: {:#?}", self.p_size);
+        debug!("-----------------");
+        tmp.view([-1, self.p_size])
             .apply(&self.fc1)
             .relu()
             .apply(&self.fc2)
@@ -269,13 +283,13 @@ mod tests {
 
     #[test]
     fn test_train_cnn() -> anyhow::Result<()> {
-        let dataset = gen_random_dataset(&[22, 3, 28, 28], &[33, 3, 28, 28], 77);
+        let dataset = gen_random_dataset(&[2, 3, 20, 20], &[3, 3, 20, 20], 77);
         let model = train(
             &dataset,
             crate::Net::new,
             tch::nn::Adam::default(),
             tch::Device::Cpu,
-            50,
+            5,
         )?;
         let forwarded = model.forward(&dataset.test_images);
         assert_eq!(
