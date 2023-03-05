@@ -96,12 +96,12 @@ impl ToDevice for Dataset {
     }
 }
 
-pub fn gen_random_dataset(train_size: i64, test_size: i64, labels: i64) -> Dataset {
+pub fn gen_random_dataset(train_size: &[i64; 4], test_size: &[i64; 4], labels: i64) -> Dataset {
     Dataset {
-        train_images: Tensor::rand(&[train_size, 1, 28, 28], (Kind::Float, MY_DEVICE)),
-        train_labels: Tensor::randint(labels, &[train_size], (Kind::Int64, MY_DEVICE)),
-        test_images: Tensor::rand(&[test_size, 1, 28, 28], (Kind::Float, MY_DEVICE)),
-        test_labels: Tensor::randint(labels, &[test_size], (Kind::Int64, MY_DEVICE)),
+        train_images: Tensor::rand(train_size, (Kind::Float, MY_DEVICE)),
+        train_labels: Tensor::randint(labels, &[train_size[0]], (Kind::Int64, MY_DEVICE)),
+        test_images: Tensor::rand(test_size, (Kind::Float, MY_DEVICE)),
+        test_labels: Tensor::randint(labels, &[test_size[0]], (Kind::Int64, MY_DEVICE)),
         labels,
     }
     .to_device(MY_DEVICE)
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_gen_random_dataset() {
-        let dataset = gen_random_dataset(55, 66, 77);
+        let dataset = gen_random_dataset(&[55, 1, 28, 28], &[66, 1, 28, 28], 77);
         println!(
             "{:#?}",
             dataset

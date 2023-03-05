@@ -57,11 +57,14 @@ pub struct Net {
     conv2: nn::Conv2D,
     fc1: nn::Linear,
     fc2: nn::Linear,
+    view_size: [i64; 4],
 }
 
 impl Net {
     pub fn new(vs: &nn::Path, dataset: &Dataset) -> Net {
-        let conv1 = nn::conv2d(vs, 1, 32, 5, Default::default());
+        let img_s = dataset.train_images.size();
+        assert_eq!(img_s.len(), 4);
+        let conv1 = nn::conv2d(vs, img_s[1], 32, 5, Default::default());
         let conv2 = nn::conv2d(vs, 32, 64, 5, Default::default());
         let fc1 = nn::linear(vs, 1024, 1024, Default::default());
         let fc2 = nn::linear(vs, 1024, dataset.labels, Default::default());
@@ -70,13 +73,14 @@ impl Net {
             conv2,
             fc1,
             fc2,
+            view_size: [-1, img_s[1], img_s[2], img_s[3]],
         }
     }
 }
 
 impl nn::Module for Net {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        xs.view([-1, 1, 28, 28])
+        xs.view(self.view_size)
             .apply(&self.conv1)
             .max_pool2d_default(2)
             .apply(&self.conv2)
@@ -235,7 +239,7 @@ mod tests {
     fn test_cnn() {
         for labels in 1..=4 {
             let vs = VarStore::new(tch::Device::Cpu);
-            let dataset = gen_random_dataset(22, 33, labels);
+            let dataset = gen_random_dataset(&[22, 1, 28, 28], &[33, 1, 28, 28], labels);
             let model = super::Net::new(&vs.root(), &dataset);
             let forwarded = model.forward(&dataset.test_images);
             assert_eq!(
@@ -265,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_train_cnn() -> anyhow::Result<()> {
-        let dataset = gen_random_dataset(22, 33, 77);
+        let dataset = gen_random_dataset(&[22, 3, 28, 28], &[33, 3, 28, 28], 77);
         let model = train(
             &dataset,
             crate::Net::new,
